@@ -7,29 +7,21 @@ static documents, then invokes the agent with a provided question.
 from __future__ import annotations
 
 import argparse
-from typing import List
-
+from typing import List, Dict, Any, Tuple
+from collections import OrderedDict
 from config import openai_api_key
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 
-STATIC_DOCUMENTS: List[Document] = [
-    Document(
-        page_content=(
-            "Feriados religiosos são datas de celebração ou reflexão "
-            "relacionadas a tradições de fé, como Páscoa, Natal, ou festas "
-            "locais ligadas a santos padroeiros."
-        )
-    ),
-    Document(
-        page_content=(
-            "Um feriado pode ser instituído por motivos civis, culturais ou "
-            "religiosos, conforme legislação e costumes da região."
-        )
-    ),
-]
+from flask import Flask, request, jsonify
+from flask_cors import CORS 
+
+
+
+
+
 
 
 @tool
@@ -77,6 +69,17 @@ def parse_args() -> argparse.Namespace:
         help="Pergunta a ser enviada ao agente.",
     )
     return parser.parse_args()
+
+
+
+app = Flask(__name__)
+CORS(app, 
+     resources={r"/*":{"origins":"*"}},
+     supports_credentials=False,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "OPTIONS"],
+     max_age=3600)
+
 
 
 if __name__ == "__main__":
