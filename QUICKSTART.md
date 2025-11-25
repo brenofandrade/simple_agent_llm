@@ -23,8 +23,9 @@ venv\Scripts\activate
 ```
 
 ### 3. Instale as dependências
+Evite o erro `AssertionError: len(weights) == expected_node_count` que pode aparecer em versões mais recentes do pip (25.x) executando o script de instalação. Ele fixa o pip em uma versão estável e instala os pacotes do projeto.
 ```bash
-pip install -r requirements.txt
+bash scripts/install.sh
 ```
 
 ### 4. Configure as variáveis de ambiente
