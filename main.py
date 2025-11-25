@@ -18,12 +18,12 @@ import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.memory import ConversationBufferMemory
+# from langchain.memory import ConversationBufferMemory  # Commented out - using custom memory system instead
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_pinecone.vectorstores import PineconeVectorStore
-from langchain.globals import set_debug, set_verbose
+# from langchain.globals import set_debug, set_verbose  # Commented out - conflicts with package dependencies
 from langchain_openai import ChatOpenAI
 from pinecone import Pinecone
 from sentence_transformers import CrossEncoder
@@ -47,8 +47,8 @@ from config import (
 from question_router import QuestionRouter
 
 # --- Ambiente e Logging ---
-set_debug(True)
-set_verbose(True)
+# set_debug(True)  # Commented out - langchain.globals conflicts with package dependencies
+# set_verbose(True)  # Commented out - langchain.globals conflicts with package dependencies
 
 # --- Variáveis de Ambiente ---
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "10"))
@@ -498,12 +498,16 @@ def chat():
         if not question:
             return jsonify({"error": "Campo 'question' é obrigatório."}), 400
 
-        memory = ConversationBufferMemory(memory_key="history", return_messages=True)
-        memory.chat_memory.messages = load_memory(session_id)
+        # ConversationBufferMemory - Commented out, using custom memory system
+        # memory = ConversationBufferMemory(memory_key="history", return_messages=True)
+        # memory.chat_memory.messages = load_memory(session_id)
+
+        # Load messages from custom memory system
+        history_messages = load_memory(session_id)
 
         # Classificação da pergunta
         if QUESTION_ROUTER:
-            question_type = QUESTION_ROUTER.classify(question, memory.chat_memory.messages)
+            question_type = QUESTION_ROUTER.classify(question, history_messages)
         else:
             question_type = "internal_docs"
 
@@ -514,23 +518,23 @@ def chat():
             use_rag = False
 
         if question_type == "greeting":
-            answer = _invoke_prompt(prompt_greeting, question, memory.chat_memory.messages)
+            answer = _invoke_prompt(prompt_greeting, question, history_messages)
             mode = "no_rag"
             context_docs: List[Document] = []
             generate_question = question
         elif question_type == "farewell":
-            answer = _invoke_prompt(prompt_farewell, question, memory.chat_memory.messages)
+            answer = _invoke_prompt(prompt_farewell, question, history_messages)
             mode = "no_rag"
             context_docs = []
             generate_question = question
         elif question_type == "clarification_needed":
-            answer = _invoke_prompt(prompt_clarification, question, memory.chat_memory.messages)
+            answer = _invoke_prompt(prompt_clarification, question, history_messages)
             mode = "no_rag"
             context_docs = []
             generate_question = question
         elif not use_rag:
             ai_msg: AIMessage = (prompt_general | llm).invoke(
-                {"input": question, "history": memory.chat_memory.messages}
+                {"input": question, "history": history_messages}
             )
             answer = _strip_fences_and_think(ai_msg.content)
             context_docs = []
@@ -553,14 +557,19 @@ def chat():
             context_text = format_docs(context_docs)
 
             ai_msg = (prompt_rag | llm).invoke(
-                {"input": question, "history": memory.chat_memory.messages, "context": context_text}
+                {"input": question, "history": history_messages, "context": context_text}
             )
             answer = _strip_fences_and_think(ai_msg.content)
 
-        # Atualiza memória
-        memory.chat_memory.add_user_message(question)
-        memory.chat_memory.add_ai_message(answer)
-        update_memory(session_id, memory.chat_memory.messages)
+        # Atualiza memória - ConversationBufferMemory commented out, using custom memory system
+        # memory.chat_memory.add_user_message(question)
+        # memory.chat_memory.add_ai_message(answer)
+        # update_memory(session_id, memory.chat_memory.messages)
+
+        # Update custom memory system
+        history_messages.append(HumanMessage(content=question))
+        history_messages.append(AIMessage(content=answer))
+        update_memory(session_id, history_messages)
 
         latency = (time.perf_counter() - start_time) * 1000
         logger.info("Latência /chat = %.2f ms", latency)
