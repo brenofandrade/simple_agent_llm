@@ -1,53 +1,84 @@
+"""Entry point for running a simple LangChain agent example.
 
-#%%
+The script wires together a chat model with a basic search tool backed by
+static documents, then invokes the agent with a provided question.
+"""
+
+from __future__ import annotations
+
+import argparse
+from typing import List
+
 from config import openai_api_key
-from pydantic import BaseModel
-import langchain
-from langchain_core.documents import Document
-from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.documents import Document
+from langchain_openai import ChatOpenAI
 
-from typing import List, Any, Dict
+STATIC_DOCUMENTS: List[Document] = [
+    Document(
+        page_content=(
+            "Feriados religiosos são datas de celebração ou reflexão "
+            "relacionadas a tradições de fé, como Páscoa, Natal, ou festas "
+            "locais ligadas a santos padroeiros."
+        )
+    ),
+    Document(
+        page_content=(
+            "Um feriado pode ser instituído por motivos civis, culturais ou "
+            "religiosos, conforme legislação e costumes da região."
+        )
+    ),
+]
 
-
-### Tools 
 
 @tool
-def search_documents(query:str) -> List[Document]:
-    """Search the vectorstore and retrieve all relevant documents"""
+def search_documents(query: str) -> List[Document]:
+    """Search static documents for content related to the query."""
 
-    docs = retriever.get_relevant_documents(query)
-
-    
-
-    return docs
-
-
-#%%
-
-model = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.1,
-    timeout=30
-)
-
-# Define at least one tool or use an empty list
-tools = []
-
-agent = create_agent(model, tools)
-
-#%%
+    query_lower = query.lower()
+    matches = [
+        document
+        for document in STATIC_DOCUMENTS
+        if query_lower in document.page_content.lower()
+    ]
+    return matches or STATIC_DOCUMENTS
 
 
-# Retrieval Augmented Generation (RAG)
+def build_model() -> ChatOpenAI:
+    """Create a chat model instance with basic configuration."""
 
-question = "O que é feriado religioso?"
+    if not openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
 
-response = agent.invoke({
-    "messages": [{"role":"user", "content":question}]
-    }) # type: ignore
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0.1,
+        timeout=30,
+    )
 
-print(response)
-#%%
 
+def run_agent(question: str) -> None:
+    """Create an agent, invoke it with the question and print the response."""
+
+    model = build_model()
+    agent = create_agent(model, [search_documents])
+
+    response = agent.invoke({"messages": [{"role": "user", "content": question}]})
+    print(response)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the sample LangChain agent.")
+    parser.add_argument(
+        "question",
+        nargs="?",
+        default="O que é feriado religioso?",
+        help="Pergunta a ser enviada ao agente.",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    run_agent(args.question)
