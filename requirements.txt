@@ -5,7 +5,8 @@ langgraph==1.0.3
 
 # OpenAI Integration
 langchain-openai>=0.2.0
-
+langchain-ollama==1.0.0
+langchain-pinecone>=0.1.1
 # Pinecone for vector search
 pinecone>=5.0.1
 

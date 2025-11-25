@@ -11,7 +11,33 @@ from typing import Dict, Any
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from agent import IntelligentAgent
-from config import logger
+from config import *
+from pinecone import Pinecone
+from langchain_pinecone.vectorstores import PineconeVectorStore
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+
+# Pinecone
+pinecone_client = Pinecone(api_key=PINECONE_API_KEY)
+index = pinecone_client.Index(PINECONE_INDEX_NAME)
+
+
+
+llm = ChatOllama(
+    model=GENERATION_MODEL, 
+    base_url=OLLAMA_BASE_URL, 
+    temperature=0)
+
+embeddings = OllamaEmbeddings(
+    model=EMBEDDING_MODEL, 
+    base_url=OLLAMA_BASE_URL
+)
+
+
+vectorstore = PineconeVectorStore(
+    index=index,
+    embedding=embeddings
+)
+
 
 # Flask App Setup
 app = Flask(__name__)
