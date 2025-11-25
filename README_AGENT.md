@@ -194,7 +194,7 @@ pip install -r requirements.txt
 
 Principais dependências:
 - `langchain-openai`: Integração com OpenAI
-- `pinecone-client`: Busca vetorial
+- `pinecone`: Busca vetorial
 - `flask`: API REST
 - `flask-cors`: CORS support
 - `python-dotenv`: Gerenciamento de variáveis de ambiente
