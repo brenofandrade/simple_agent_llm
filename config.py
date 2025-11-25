@@ -53,7 +53,8 @@ def validate_config():
         errors.append("PINECONE_INDEX ou PINECONE_INDEX_NAME não configurada.")
 
     if errors:
-        raise RuntimeError(f"Erro de configuração:\n{'\n'.join(errors)}")
+        error_msg = '\n'.join(errors)
+        raise RuntimeError(f"Erro de configuração:\n{error_msg}")
     
     logger.info("✓ Configurações validadas com sucesso")
     logger.info(f"  - Pinecone Index: {PINECONE_INDEX_NAME}")

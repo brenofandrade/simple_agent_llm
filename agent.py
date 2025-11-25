@@ -1,267 +1,336 @@
-"""Agent - Agente principal com roteamento inteligente de perguntas."""
+"""Agent - Agente inteligente que usa tools baseado na classificação."""
 
 from __future__ import annotations
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
-from question_router import QuestionRouter, QuestionType
-from conversation_manager import ConversationManager
-from document_search import DocumentSearcher
-from config import openai_api_key, logger
+from langchain_ollama import ChatOllama
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from router import QuestionClassifier, QuestionType
+from tools import get_pinecone_tool, SearchResult
+from config import (
+    OPENAI_KEY,
+    GENERATION_MODEL,
+    OLLAMA_BASE_URL,
+    logger
+)
 
 
 class IntelligentAgent:
-    """Agente inteligente com roteamento de perguntas."""
+    """Agente inteligente com roteamento e tools."""
 
-    def __init__(self, session_id: str = None):
+    def __init__(
+        self,
+        session_id: str = "default",
+        use_openai_for_generation: bool = False
+    ):
         """Inicializa o agente.
 
         Args:
-            session_id: ID da sessão (opcional)
+            session_id: ID da sessão
+            use_openai_for_generation: Se True, usa OpenAI; se False, usa Ollama
         """
-        self.model = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.7,
-            openai_api_key=openai_api_key
-        )
+        self.session_id = session_id
+        self.classifier = QuestionClassifier()
+        self.pinecone_tool = get_pinecone_tool()
 
-        self.router = QuestionRouter(self.model)
-        self.conversation = ConversationManager(session_id)
-        self.document_searcher = DocumentSearcher(relevance_threshold=0.7)
-
-        logger.info(f"IntelligentAgent inicializado - Session: {self.conversation.session_id}")
-
-    def process_message(self, user_message: str) -> str:
-        """Processa mensagem do usuário e retorna resposta apropriada.
-
-        Args:
-            user_message: Mensagem do usuário
-
-        Returns:
-            Resposta do agente
-        """
-        logger.info(f"Processando mensagem: {user_message}")
-
-        # Classifica a pergunta
-        question_type = self.router.classify(user_message, self.conversation.history)
-
-        # Roteamento baseado no tipo
-        if question_type == "greeting":
-            response = self._handle_greeting(user_message)
-        elif question_type == "farewell":
-            response = self._handle_farewell(user_message)
-        elif question_type == "clarification_needed":
-            response = self._handle_clarification(user_message)
-        elif question_type == "internal_docs":
-            response = self._handle_internal_docs(user_message)
-        elif question_type == "general_knowledge":
-            response = self._handle_general_knowledge(user_message)
+        # Modelo de geração
+        if use_openai_for_generation and OPENAI_KEY:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                temperature=0.7,
+                openai_api_key=OPENAI_KEY
+            )
+            logger.info("Usando OpenAI para geração")
         else:
-            response = self._handle_clarification(user_message)
+            self.llm = ChatOllama(
+                model=GENERATION_MODEL,
+                base_url=OLLAMA_BASE_URL,
+                temperature=0.7
+            )
+            logger.info(f"Usando Ollama para geração: {GENERATION_MODEL}")
 
-        # Adiciona ao histórico
-        self.conversation.add_turn(
-            user_message=user_message,
-            assistant_message=response,
-            question_type=question_type
-        )
+        # Prompts
+        self._setup_prompts()
 
-        return response
+        logger.info(f"✓ IntelligentAgent inicializado - Session: {session_id}")
 
-    def _handle_greeting(self, message: str) -> str:
-        """Trata saudações."""
-        logger.info("Handler: greeting")
+    def _setup_prompts(self):
+        """Configura os prompts do agente."""
+        # Prompt para internal_docs com contexto
+        self.prompt_internal_docs = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """Você é o Assistente interno da empresa para dúvidas de colaboradores.
 
-        greetings = [
-            "Olá! Como posso ajudá-lo hoje?",
-            "Olá, tudo bem! Em que posso auxiliar?",
-            "Oi! Estou aqui para ajudar. O que você precisa?",
-            "Olá! Seja bem-vindo. Como posso ser útil?"
-        ]
+INSTRUÇÕES:
+1. Use SOMENTE as informações dos documentos fornecidos no Contexto
+2. Seja preciso, objetivo e profissional
+3. Sempre mencione a fonte quando disponível (Manual, Norma, etc.)
+4. Se o contexto não tiver informação suficiente, seja honesto
+5. Estruture a resposta de forma clara
+6. Não inclua nomes de arquivos ou códigos de documentos
+7. Não repita a pergunta do usuário
 
-        # Usa o modelo para gerar uma saudação natural
-        system_prompt = """Você é um assistente cordial e profissional.
-Responda à saudação do usuário de forma amigável e ofereça ajuda.
+FORMATO DA RESPOSTA:
+- Apresente as informações de forma estruturada
+- Use citações curtas com Markdown (>) quando apropriado
+- Seja cordial e ofereça ajuda adicional ao final
+
+Se não houver informação suficiente no Contexto, use uma destas mensagens:
+- "Não localizei informação suficiente no Contexto para responder com segurança. Pode reformular a pergunta?"
+- "O Contexto traz menções relacionadas, mas sem detalhes suficientes. Recomendo validar com a área responsável."
+"""
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("system", "# Contexto dos Documentos:\n{context}"),
+            ("user", "# Pergunta:\n{input}")
+        ])
+
+        # Prompt para general_knowledge
+        self.prompt_general = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """Você é um assistente útil e responsável.
+
+INSTRUÇÕES:
+1. Responda de forma clara, precisa e educativa
+2. Use conhecimento geral, não invente fatos sobre empresas
+3. Nunca forneça dados pessoais ou confidenciais
+4. Não dê aconselhamento jurídico/financeiro específico
+5. Se algo for especulativo, diga que não sabe
+6. Seja objetivo mas completo
+7. Mantenha tom profissional e amigável
+"""
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("user", "{input}")
+        ])
+
+        # Prompt para greetings
+        self.prompt_greeting = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """Você é um assistente cordial e profissional.
+
+Responda à saudação de forma breve e amigável.
+Convide o usuário a fazer sua pergunta.
+Seja natural e acolhedor."""
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("user", "{input}")
+        ])
+
+        # Prompt para farewell
+        self.prompt_farewell = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """Você é um assistente cordial e profissional.
+
+Responda à despedida de forma simpática.
+Agradeça o contato e reforce que está disponível.
 Seja breve e natural."""
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("user", "{input}")
+        ])
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=message)
-        ]
+        # Prompt para clarification
+        self.prompt_clarification = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """Você precisa ajudar a clarificar a dúvida do usuário.
 
-        try:
-            response = self.model.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Erro ao gerar saudação: {e}")
-            return greetings[0]
-
-    def _handle_farewell(self, message: str) -> str:
-        """Trata despedidas."""
-        logger.info("Handler: farewell")
-
-        system_prompt = """Você é um assistente cordial e profissional.
-Responda à despedida do usuário de forma amigável e profissional.
-Deixe claro que está disponível para ajudar no futuro.
-Seja breve e natural."""
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=message)
-        ]
-
-        try:
-            response = self.model.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Erro ao gerar despedida: {e}")
-            return "Disponha! Sempre que precisar, estou aqui para ajudar. Tenha um ótimo dia!"
-
-    def _handle_clarification(self, message: str) -> str:
-        """Trata perguntas que precisam de clarificação."""
-        logger.info("Handler: clarification_needed")
-
-        # Marca que está aguardando clarificação
-        self.conversation.set_awaiting_clarification(topic=message)
-
-        system_prompt = """Você é um assistente que ajuda a clarificar dúvidas.
-O usuário fez uma pergunta vaga ou ambígua. Você precisa fazer 1-2 perguntas para entender melhor o que ele precisa.
-
-Especificamente, pergunte:
-1. Se ele quer informações gerais sobre o assunto OU
-2. Se ele quer saber sobre procedimentos/políticas/normas internas da empresa
-
-Seja cordial e objetivo. Mantenha as perguntas curtas e diretas.
+INSTRUÇÕES:
+1. Faça 1-2 perguntas objetivas
+2. Pergunte se ele busca informações gerais OU procedimentos internos
+3. Seja cordial e direto
+4. Mantenha as perguntas curtas
 
 Exemplo:
 Usuário: "Quero saber sobre reembolso"
-Você: "Claro! O que você gostaria de saber sobre reembolso? Quer que eu forneça informações gerais sobre o assunto ou prefere saber sobre o procedimento específico da empresa?"
+Você: "Claro! Você quer informações gerais sobre reembolso ou o procedimento específico da empresa?"
 """
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("user", "{input}")
+        ])
 
-        history_context = self.conversation.get_history_summary(last_n=3)
+    def process_question(
+        self,
+        question: str,
+        history: List[Any] = None,
+        k: int = 5,
+        namespace: str = None
+    ) -> Dict[str, Any]:
+        """Processa a pergunta do usuário.
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Contexto recente:\n{history_context}\n\nPergunta atual: {message}")
-        ]
+        Args:
+            question: Pergunta do usuário
+            history: Histórico da conversa
+            k: Número de documentos a buscar (para internal_docs)
+            namespace: Namespace do Pinecone
 
-        try:
-            response = self.model.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Erro ao gerar clarificação: {e}")
-            return "Entendi que você tem uma dúvida, mas preciso de mais detalhes. Você quer informações gerais sobre o assunto ou sobre procedimentos específicos da empresa?"
+        Returns:
+            Dicionário com resposta e metadados
+        """
+        history = history or []
 
-    def _handle_internal_docs(self, message: str) -> str:
-        """Trata perguntas sobre documentos internos."""
-        logger.info("Handler: internal_docs")
+        logger.info(f"Processando pergunta: '{question}'")
 
-        # Limpa estado de clarificação
-        self.conversation.clear_clarification_state()
+        # Classifica a pergunta
+        question_type = self.classifier.classify(question, history)
 
-        # Primeiro informa que vai buscar
-        searching_message = "Perfeito! Vou buscar na base de conhecimento disponível. Aguarde alguns instantes..."
-        logger.info(searching_message)
+        # Processa baseado no tipo
+        if question_type == "greetings":
+            return self._handle_greeting(question, history)
 
-        # Busca documentos relevantes
-        search_results = self.document_searcher.search(message, top_k=5)
+        elif question_type == "farewell":
+            return self._handle_farewell(question, history)
 
-        # Verifica se encontrou resultados relevantes
-        if not self.document_searcher.has_relevant_results(search_results):
-            return self._handle_no_relevant_docs(message)
+        elif question_type == "clarification_needed":
+            return self._handle_clarification(question, history)
 
-        # Formata contexto com os documentos encontrados
-        docs_context = self.document_searcher.format_results_for_context(search_results, max_results=3)
+        elif question_type == "internal_docs":
+            return self._handle_internal_docs(question, history, k, namespace)
 
-        # Gera resposta usando os documentos
-        system_prompt = """Você é um assistente especializado em responder perguntas usando documentos internos da empresa.
+        elif question_type == "general_knowledge":
+            return self._handle_general_knowledge(question, history)
 
-INSTRUÇÕES:
-1. Use APENAS as informações dos documentos fornecidos para responder
-2. Sempre mencione a fonte (Manual, Norma, etc.) quando disponível
-3. Seja preciso e objetivo
-4. Se os documentos não contiverem informação suficiente, seja honesto sobre isso
-5. Estruture a resposta de forma clara e profissional
-6. Ao final, pergunte se pode ajudar com mais alguma coisa
+        else:
+            # Fallback
+            return self._handle_clarification(question, history)
 
-FORMATO DA RESPOSTA:
-- Inicie mencionando a fonte se disponível
-- Apresente as informações de forma estruturada
-- Finalize oferecendo ajuda adicional
-"""
+    def _handle_greeting(self, question: str, history: List[Any]) -> Dict[str, Any]:
+        """Trata saudações."""
+        logger.info("Handler: greetings")
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"DOCUMENTOS ENCONTRADOS:\n{docs_context}\n\nPERGUNTA DO USUÁRIO:\n{message}")
-        ]
+        ai_msg = (self.prompt_greeting | self.llm).invoke({
+            "input": question,
+            "history": history
+        })
 
-        try:
-            response = self.model.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Erro ao gerar resposta com documentos: {e}")
-            return "Encontrei informações relevantes, mas tive um problema ao processar a resposta. Por favor, tente reformular sua pergunta."
+        return {
+            "answer": ai_msg.content,
+            "question_type": "greetings",
+            "used_tool": False,
+            "sources": None
+        }
 
-    def _handle_no_relevant_docs(self, message: str) -> str:
-        """Trata caso onde não encontrou documentos relevantes."""
-        logger.info("Nenhum documento relevante encontrado")
+    def _handle_farewell(self, question: str, history: List[Any]) -> Dict[str, Any]:
+        """Trata despedidas."""
+        logger.info("Handler: farewell")
 
-        system_prompt = """Você é um assistente que informa ao usuário que não encontrou documentos relevantes.
+        ai_msg = (self.prompt_farewell | self.llm).invoke({
+            "input": question,
+            "history": history
+        })
 
-INSTRUÇÕES:
-1. Informe educadamente que não encontrou informações suficientes na base de conhecimento
-2. Ofereça responder com conhecimento geral caso ele queira
-3. Seja cordial e útil
-4. Mantenha a resposta curta
+        return {
+            "answer": ai_msg.content,
+            "question_type": "farewell",
+            "used_tool": False,
+            "sources": None
+        }
 
-Exemplo:
-"Não encontrei informações específicas sobre isso em nossa base de documentos internos. Posso fornecer uma explicação geral sobre o assunto, se desejar. O que você prefere?"
-"""
+    def _handle_clarification(self, question: str, history: List[Any]) -> Dict[str, Any]:
+        """Trata perguntas que precisam clarificação."""
+        logger.info("Handler: clarification_needed")
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Pergunta do usuário: {message}")
-        ]
+        ai_msg = (self.prompt_clarification | self.llm).invoke({
+            "input": question,
+            "history": history
+        })
 
-        try:
-            response = self.model.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Erro ao gerar resposta sem documentos: {e}")
-            return "Não encontrei informações suficientes sobre isso em nossa base de conhecimento. Posso lhe fornecer uma explicação geral sobre o assunto, se desejar. O que você prefere?"
+        return {
+            "answer": ai_msg.content,
+            "question_type": "clarification_needed",
+            "used_tool": False,
+            "sources": None
+        }
 
-    def _handle_general_knowledge(self, message: str) -> str:
+    def _handle_general_knowledge(self, question: str, history: List[Any]) -> Dict[str, Any]:
         """Trata perguntas de conhecimento geral."""
         logger.info("Handler: general_knowledge")
 
-        # Limpa estado de clarificação
-        self.conversation.clear_clarification_state()
+        ai_msg = (self.prompt_general | self.llm).invoke({
+            "input": question,
+            "history": history
+        })
 
-        system_prompt = """Você é um assistente útil e conhecedor.
-Responda à pergunta do usuário usando seu conhecimento geral.
+        return {
+            "answer": ai_msg.content,
+            "question_type": "general_knowledge",
+            "used_tool": False,
+            "sources": None
+        }
 
-INSTRUÇÕES:
-1. Forneça uma resposta clara, precisa e educativa
-2. Use exemplos quando apropriado
-3. Seja objetivo mas completo
-4. Ao final, pergunte se pode ajudar com mais alguma coisa
-5. Mantenha um tom profissional e amigável
-"""
+    def _handle_internal_docs(
+        self,
+        question: str,
+        history: List[Any],
+        k: int,
+        namespace: Optional[str]
+    ) -> Dict[str, Any]:
+        """Trata perguntas sobre documentos internos.
 
-        history_context = self.conversation.get_history_summary(last_n=3)
+        Aqui o agente DECIDE usar a tool do Pinecone.
+        """
+        logger.info("Handler: internal_docs - Usando Pinecone tool")
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Contexto recente:\n{history_context}\n\nPergunta: {message}")
+        # AGENTE DECIDE: Para internal_docs, SEMPRE usa a tool
+        search_results = self.pinecone_tool.search(
+            query=question,
+            k=k,
+            namespace=namespace,
+            rerank_method="cross-encoder",
+            rerank_top_k=3
+        )
+
+        if not search_results:
+            # Nenhum documento encontrado
+            answer = (
+                "Não encontrei documentos relevantes sobre esse assunto "
+                "na base de conhecimento. Pode reformular a pergunta ou "
+                "fornecer mais detalhes?"
+            )
+            return {
+                "answer": answer,
+                "question_type": "internal_docs",
+                "used_tool": True,
+                "tool_name": "pinecone_search",
+                "sources": [],
+                "num_docs_found": 0
+            }
+
+        # Formata contexto com os documentos
+        context = self.pinecone_tool.format_results_for_context(search_results, max_results=3)
+
+        # Gera resposta usando o contexto
+        ai_msg = (self.prompt_internal_docs | self.llm).invoke({
+            "input": question,
+            "history": history,
+            "context": context
+        })
+
+        # Serializa fontes para resposta
+        sources = [
+            {
+                "rank": i + 1,
+                "source": result.formatted_source,
+                "score": result.score,
+                "rerank_score": result.rerank_score,
+                "content_preview": result.content[:500],
+                "metadata": result.metadata
+            }
+            for i, result in enumerate(search_results[:3])
         ]
 
-        try:
-            response = self.model.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Erro ao gerar resposta de conhecimento geral: {e}")
-            return "Desculpe, tive um problema ao processar sua pergunta. Pode tentar reformulá-la?"
-
-    def get_conversation_context(self) -> Dict[str, Any]:
-        """Retorna informações sobre o contexto da conversa."""
-        return self.conversation.get_context_info()
+        return {
+            "answer": ai_msg.content,
+            "question_type": "internal_docs",
+            "used_tool": True,
+            "tool_name": "pinecone_search",
+            "sources": sources,
+            "num_docs_found": len(search_results)
+        }

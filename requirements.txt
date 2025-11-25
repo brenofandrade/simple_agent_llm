@@ -5,46 +5,20 @@ langgraph==1.0.3
 
 # Machine learning runtime
 torch==2.3.1
+numpy>=1.24.0
+sentence-transformers>=2.2.0
 
 # OpenAI Integration
 langchain-openai>=0.2.0
+openai>=1.0.0
+
+# Ollama Integration
 langchain-ollama==1.0.0
-langchain-pinecone>=0.1.1
+
 # Pinecone for vector search
+langchain-pinecone>=0.1.1
 pinecone>=5.0.1
 
 # Flask API
 Flask>=3.0.0
 Flask-CORS>=4.0.0
-
-
-
-
-
-
-
-
-
-
-
-
-# openai==1.13.3
-# langchain==0.1.11
-# langchain-openai==0.0.8
-# python-dotenv==1.0.1
-# langchainhub==0.1.15
-# pandas==2.2.2
-
-# pinecone-client>=5.0.1
-
-# langchain>=0.3.0
-# # langchain-core>=0.3.0
-# langchain-community
-# langchain-text-splitters
-# langchain-ollama>=0.1.0
-# langchain-pinecone>=0.1.1
-# langchain-core==1.0.3 
-# langgraph==1.0.2 
-# langgraph-checkpoint==3.0.1 
-# langgraph-prebuilt==1.0.2 
-# langgraph-sdk==0.2.9 
