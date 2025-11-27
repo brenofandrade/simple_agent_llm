@@ -1,8 +1,19 @@
+# Enviroment Variable
 python-dotenv==1.2.1
+
+# Core Web (Flask backend
+flask>=3.0.3
+flask-cors>=4.0.1
+waitress>=3.0
+
+# LANGCHAIN / LANGGRAPH
+langchain>=1.0.0
 langchain-core==1.1.0
+langchain-openai==1.1.0
+langchain-pinecone>=0.1.1
 langgraph==1.0.3
 
-
+ollama
 
 
 
@@ -23,7 +34,7 @@ langgraph==1.0.3
 # langchainhub==0.1.15
 # pandas==2.2.2
 
-# pinecone-client>=5.0.1
+# pinecone-client>=5.0.1 # Deprecated
 
 # langchain>=0.3.0
 # # langchain-core>=0.3.0

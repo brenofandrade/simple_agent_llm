@@ -1,53 +1,101 @@
+import json
+import time
+import re
+from typing import Dict
 
-#%%
 from config import openai_api_key
-from pydantic import BaseModel
-import langchain
-from langchain_core.documents import Document
+from router import route_question
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_agent
-from langchain.tools import tool
-
-from typing import List, Any, Dict
 
 
-### Tools 
-
-@tool
-def search_documents(query:str) -> List[Document]:
-    """Search the vectorstore and retrieve all relevant documents"""
-
-    docs = retriever.get_relevant_documents(query)
-
-    
-
-    return docs
 
 
-#%%
 
-model = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.1,
-    timeout=30
+def process_payload(payload: dict) -> str:
+    """
+    Processa a pergunta do usuário a partir do payload.
+
+    Espera um campo "message" no JSON.
+    """
+    query = (payload.get("message") or "").strip()
+
+    if not query:
+        raise ValueError("Campo 'message' é obrigatório e não pode estar vazio.")
+
+    return query
+
+
+app = Flask(__name__)
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    supports_credentials=False,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "OPTIONS"],
+    max_age=3600,
 )
 
-# Define at least one tool or use an empty list
-tools = []
 
-agent = create_agent(model, tools)
-
-#%%
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 
-# Retrieval Augmented Generation (RAG)
+@app.route("/chat", methods=["POST"])
+def chat():
+    """
+    Espera JSON:
+    {
+        "message": "texto da pergunta",
+        "session_id": "opcional"
+    }
+    """
 
-question = "O que é feriado religioso?"
+    start_time = time.perf_counter()
 
-response = agent.invoke({
-    "messages": [{"role":"user", "content":question}]
-    }) # type: ignore
+    try:
+        payload = request.get_json(force=True, silent=False) or {}
+        question = process_payload(payload)
 
-print(response)
-#%%
+        router_result = route_question(question)
 
+        latency = time.perf_counter() - start_time
+
+        return (
+            jsonify(
+                {
+                    "question": question,
+                    "classification": router_result["classification"],
+                    "router_message": router_result["message"],
+                    "latency": latency,
+                }
+            ),
+            200,
+        )
+
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+
+    except Exception as e:
+        # se quiser ver o stacktrace no console:
+        import traceback
+
+        print("Erro na rota /chat:\n", traceback.format_exc())
+
+        return (
+            jsonify(
+                {
+                    "error": "Erro interno ao processar a solicitação.",
+                    "detalhes": str(e),
+                }
+            ),
+            500,
+        )
+
+
+if __name__ == "__main__":
+    # garante que está rodando na porta 8000, como o seu cliente está usando
+    app.run(host="0.0.0.0", port=8000, debug=True)
